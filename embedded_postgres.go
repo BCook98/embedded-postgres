@@ -19,7 +19,6 @@ type EmbeddedPostgres struct {
 	remoteFetchStrategy RemoteFetchStrategy
 	initDatabase        initDatabase
 	createDatabase      createDatabase
-	started             bool
 	syncedLogger        *syncedLogger
 }
 
@@ -45,18 +44,13 @@ func newDatabaseWithConfig(config Config) *EmbeddedPostgres {
 	cacheLocator := defaultCacheLocator(versionStrategy)
 	remoteFetchStrategy := defaultRemoteFetchStrategy(config.binaryRepositoryURL, versionStrategy, cacheLocator)
 
-	ep := &EmbeddedPostgres{
+	return &EmbeddedPostgres{
 		config:              config,
 		cacheLocator:        cacheLocator,
 		remoteFetchStrategy: remoteFetchStrategy,
 		initDatabase:        defaultInitDatabase,
 		createDatabase:      defaultCreateDatabase,
-		started:             false,
 	}
-
-	ep.started = checkPostgresStatus(ep)
-
-	return ep
 }
 
 // Start will try to start the configured Postgres process returning an error when there were any problems with invocation.
@@ -64,20 +58,20 @@ func newDatabaseWithConfig(config Config) *EmbeddedPostgres {
 //
 //nolint:funlen
 func (ep *EmbeddedPostgres) Start() error {
-	if ep.started {
-		return errors.New("server is already started")
-	}
-
-	if err := ensurePortAvailable(ep.config.port); err != nil {
-		return err
-	}
-
 	logger, err := newSyncedLogger("", ep.config.logger)
 	if err != nil {
 		return errors.New("unable to create logger")
 	}
 
 	ep.syncedLogger = logger
+
+	if checkPostgresStatus(ep) {
+		return errors.New("server is already started")
+	}
+
+	if err := ensurePortAvailable(ep.config.port); err != nil {
+		return err
+	}
 
 	cacheLocation, cacheExists := ep.cacheLocator()
 
@@ -130,8 +124,6 @@ func (ep *EmbeddedPostgres) Start() error {
 		return err
 	}
 
-	ep.started = true
-
 	if !reuseData {
 		if err := ep.createDatabase(ep.config.port, ep.config.username, ep.config.password, ep.config.database); err != nil {
 			if stopErr := stopPostgres(ep); stopErr != nil {
@@ -167,15 +159,22 @@ func (ep *EmbeddedPostgres) cleanDataDirectoryAndInit() error {
 
 // Stop will try to stop the Postgres process gracefully returning an error when there were any problems.
 func (ep *EmbeddedPostgres) Stop() error {
-	if !ep.started {
+	if ep.syncedLogger == nil {
+		logger, err := newSyncedLogger("", ep.config.logger)
+		if err != nil {
+			return errors.New("unable to create logger")
+		}
+
+		ep.syncedLogger = logger
+	}
+
+	if !checkPostgresStatus(ep) {
 		return errors.New("server has not been started")
 	}
 
 	if err := stopPostgres(ep); err != nil {
 		return err
 	}
-
-	ep.started = false
 
 	if err := ep.syncedLogger.flush(); err != nil {
 		return err
