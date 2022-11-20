@@ -45,7 +45,7 @@ func newDatabaseWithConfig(config Config) *EmbeddedPostgres {
 	cacheLocator := defaultCacheLocator(versionStrategy)
 	remoteFetchStrategy := defaultRemoteFetchStrategy(config.binaryRepositoryURL, versionStrategy, cacheLocator)
 
-	return &EmbeddedPostgres{
+	ep := &EmbeddedPostgres{
 		config:              config,
 		cacheLocator:        cacheLocator,
 		remoteFetchStrategy: remoteFetchStrategy,
@@ -53,10 +53,15 @@ func newDatabaseWithConfig(config Config) *EmbeddedPostgres {
 		createDatabase:      defaultCreateDatabase,
 		started:             false,
 	}
+
+	ep.started = checkPostgresStatus(ep)
+
+	return ep
 }
 
 // Start will try to start the configured Postgres process returning an error when there were any problems with invocation.
 // If any error occurs Start will try to also Stop the Postgres process in order to not leave any sub-process running.
+//
 //nolint:funlen
 func (ep *EmbeddedPostgres) Start() error {
 	if ep.started {
@@ -192,6 +197,20 @@ func startPostgres(ep *EmbeddedPostgres) error {
 	}
 
 	return nil
+}
+
+func checkPostgresStatus(ep *EmbeddedPostgres) bool {
+	postgresBinary := filepath.Join(ep.config.binariesPath, "bin/pg_ctl")
+	postgresProcess := exec.Command(postgresBinary, "status", "-w", "-D", ep.config.dataPath)
+
+	postgresProcess.Stdout = ep.syncedLogger.file
+	postgresProcess.Stderr = ep.syncedLogger.file
+
+	if err := postgresProcess.Run(); err != nil {
+		return false
+	}
+
+	return true
 }
 
 func stopPostgres(ep *EmbeddedPostgres) error {
